@@ -1,66 +1,55 @@
-name: CI/CD Desktop App
+name: .NET Core Desktop
 
 on:
   push:
-    branches: [ main ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ main ]
+    branches: [ "main" ]
 
 jobs:
   build:
     strategy:
       matrix:
-        configuration: [Release]
+        configuration: [Debug, Release]
 
     runs-on: windows-latest
 
     env:
-      Solution_Name: YourApp.sln
-      Test_Project_Path: YourApp.Tests/YourApp.Tests.csproj
-      Wap_Project_Directory: YourApp.Package
-      Wap_Project_Path: YourApp.Package/YourApp.Package.wapproj
+      Solution_Name: skel2json.sln
+      Wap_Project_Directory: Skel2Json.Package
+      Wap_Project_Path: Skel2Json.Package/Skel2Json.Package.wapproj
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-      - name: Install .NET 8 SDK
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
+    - name: Install .NET SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 8.0.x
 
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
 
-      - name: Run unit tests
-        run: dotnet test "${{ env.Test_Project_Path }}" --configuration ${{ matrix.configuration }}
+    - name: Build the solution
+      run: dotnet build ${{ env.Solution_Name }} --configuration ${{ matrix.configuration }}
 
-      - name: Restore solution
-        run: msbuild "${{ env.Solution_Name }}" /t:Restore /p:Configuration=${{ matrix.configuration }}
+    - name: Decode the pfx
+      run: |
+        $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.Base64_Encoded_Pfx }}")
+        $certificatePath = Join-Path -Path $env:Wap_Project_Directory -ChildPath GitHubActionsWorkflow.pfx
+        [IO.File]::WriteAllBytes("$certificatePath", $pfx_cert_byte)
 
-      - name: Decode signing certificate
-        shell: pwsh
-        run: |
-          $bytes = [System.Convert]::FromBase64String("${{ secrets.Base64_Encoded_Pfx }}")
-          $certPath = Join-Path "${{ env.Wap_Project_Directory }}" "GitHubActionsWorkflow.pfx"
-          [IO.File]::WriteAllBytes($certPath, $bytes)
+    - name: Create the app package
+      run: msbuild $env:Wap_Project_Path /p:Configuration=${{ matrix.configuration }} /p:UapAppxPackageBuildMode=StoreUpload /p:AppxBundle=Always /p:PackageCertificateKeyFile=GitHubActionsWorkflow.pfx /p:PackageCertificatePassword=${{ secrets.Pfx_Key }}
 
-      - name: Build & package MSIX bundle
-        run: |
-          msbuild "${{ env.Wap_Project_Path }}" /p:Configuration=${{ matrix.configuration }} `
-            /p:AppxBundle=Always `
-            /p:AppxBundlePlatforms="x86|x64" `
-            /p:UapAppxPackageBuildMode=StoreUpload `
-            /p:PackageCertificateKeyFile="${{ env.Wap_Project_Directory }}\GitHubActionsWorkflow.pfx" `
-            /p:PackageCertificatePassword="${{ secrets.Pfx_Key }}"
+    - name: Remove the pfx
+      run: Remove-Item -path $env:Wap_Project_Directory\GitHubActionsWorkflow.pfx
 
-      - name: Cleanup certificate
-        run: Remove-Item -Path "${{ env.Wap_Project_Directory }}\GitHubActionsWorkflow.pfx"
-
-      - name: Upload MSIX package
-        uses: actions/upload-artifact@v4
-        with:
-          name: msix-package
-          path: "${{ env.Wap_Project_Directory }}/AppPackages"
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: MSIX Package
+        path: ${{ env.Wap_Project_Directory }}\AppPackages
